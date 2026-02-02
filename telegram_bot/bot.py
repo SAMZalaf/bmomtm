@@ -189,9 +189,10 @@ try:
     from smspool_service import (
         SMSPoolAPI, SMSPoolDB, smspool_db,
         smspool_main_menu, handle_smspool_callback,
+        handle_smspool_inline_query,
         smspool_admin_menu, handle_smspool_admin_callback,
         handle_admin_api_key_input, handle_admin_margin_input,
-        get_smspool_message, get_user_language as get_smspool_user_language
+        get_smspool_message, get_user_language as get_smspool_user_language,
     )
     SMSPOOL_AVAILABLE = True
     logger.info("✅ تم تحميل وحدة SMSPool بنجاح")
@@ -16667,14 +16668,20 @@ def setup_bot():
         from luxury_service import handle_luxury_inline_query
         
         async def unified_inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            query_text = update.inline_query.query.strip().lower()
-            # توجيه الطلب بناءً على الكلمة الافتتاحية
-            # Luxury: أي بحث فارغ أو يبدأ بـ socks أو سوكس أو أي حرف (للبحث المباشر)
+            query_text = (update.inline_query.query or "").strip().lower()
+
+            # SMSPool: يبدأ بـ sp: أو smspool:
+            if SMSPOOL_AVAILABLE and (query_text.startswith("sp:") or query_text.startswith("smspool:")):
+                return await handle_smspool_inline_query(update, context)
+
+            # Luxury: أي بحث فارغ أو يبدأ بـ socks أو سوكس (للبحث المباشر)
             if query_text.startswith("socks") or query_text.startswith("سوكس") or query_text == "":
                 return await handle_luxury_inline_query(update, context)
+
             # NonVoip: يبدأ بـ nv: أو nonvoip أو أرقام
             if query_text.startswith("nv:") or query_text.startswith("nonvoip") or query_text.startswith("أرقام"):
                 return await handle_nonvoip_inline_query(update, context)
+
             # البحث العام: يوجه إلى Luxury للبحث عن الدول
             return await handle_luxury_inline_query(update, context)
 
