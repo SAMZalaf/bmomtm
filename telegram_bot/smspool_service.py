@@ -4,21 +4,39 @@
 SMSPool Service Module - Complete API Integration for SMS Verifications
 وحدة SMSPool المدمجة للتعامل مع API خدمات التحقق عبر الرسائل
 
-هذا الملف يحل محل خدمة NonVoip ويوفر:
+هذا الملف يوفر تدفق شراء كامل ومتكامل:
 - SMSPoolAPI: التعامل مع SMSPool API
 - SMSPoolDB: إدارة قاعدة البيانات
 - وظائف البوت: دوال الزبائن والآدمن
-- معالجات Inline Query
+- معالجات Inline Query للبحث عن الدول والخدمات
+
+تدفق الشراء (مطابق لـ NonVoip الناجح):
+1. اختيار زر "شراء رقم" → handle_buy_sms()
+2. فتح Inline Query للبحث → handle_smspool_inline_query()
+3. عرض قائمة الدول → الدول الشائعة أولاً
+4. اختيار دولة → عرض الخدمات المتاحة لتلك الدولة
+5. اختيار خدمة → تأكيد الشراء مع عرض التفاصيل
+6. إتمام الشراء → process_purchase() - خصم الرصيد وحفظ الطلب
+7. المراقبة التلقائية → check_sms_job() - فحص وصول الرسائل
 
 API Endpoints Used:
 - Balance: POST https://api.smspool.net/request/balance
 - Services: GET https://api.smspool.net/service/retrieve_all
 - Countries: GET https://api.smspool.net/country/retrieve_all
+- Price: POST https://api.smspool.net/request/price
 - Purchase SMS: POST https://api.smspool.net/purchase/sms
 - Check SMS: POST https://api.smspool.net/sms/check
 - Cancel SMS: POST https://api.smspool.net/sms/cancel
 - Active Orders: POST https://api.smspool.net/request/active
 - Resend SMS: POST https://api.smspool.net/sms/resend
+
+الوظائف الرئيسية:
+- handle_buy_sms(): نقطة البداية لعملية الشراء
+- handle_smspool_inline_query(): البحث عن دول وخدمات
+- confirm_purchase(): تأكيد تفاصيل الشراء
+- process_purchase(): معالجة الشراء وخصم الرصيد
+- check_sms_job(): المراقبة التلقائية للرسائل
+- cancel_order(): إلغاء الطلب واسترداد الرصيد
 """
 
 import os
@@ -873,12 +891,91 @@ async def handle_smspool_callback(update: Update, context: ContextTypes.DEFAULT_
     elif data.startswith("sp_country_"):
         country_id = data.replace("sp_country_", "")
         context.user_data['sp_country'] = country_id
-        await show_services_menu(update, context, country_id)
+        
+        # عرض الخدمات المتاحة للدولة المختارة
+        api_key = smspool_db.get_api_key()
+        api = SMSPoolAPI(api_key)
+        services = api.get_services()
+        
+        if not services:
+            await query.edit_message_text(
+                get_smspool_message('error', language).format(message="No services available")
+            )
+            return
+        
+        # الحصول على معلومات الدولة
+        countries = api.get_countries()
+        selected_country = None
+        for c in countries:
+            if str(c.get('ID', c.get('id', ''))) == country_id:
+                selected_country = c
+                break
+        
+        country_name = selected_country.get('name', 'Unknown') if selected_country else 'Unknown'
+        country_code = selected_country.get('short_name', '') if selected_country else ''
+        flag = get_country_flag(country_code)
+        
+        # عرض الخدمات
+        keyboard = []
+        margin = smspool_db.get_margin_percent()
+        
+        for service in services[:20]:
+            service_id = str(service.get('ID', service.get('id', '')))
+            service_name = service.get('name', 'Unknown')
+            
+            # حاول الحصول على السعر الفعلي
+            price_info = api.get_service_price(service_id, country_id)
+            if price_info and price_info.get('price'):
+                cost_price = float(price_info.get('price', 0.5))
+            else:
+                cost_price = 0.5  # سعر افتراضي
+            
+            sale_price = round(cost_price * (1 + margin/100), 2)
+            
+            # أيقونة الخدمة
+            icon = '📱'
+            service_lower = service_name.lower()
+            if 'whatsapp' in service_lower:
+                icon = '💚'
+            elif 'telegram' in service_lower:
+                icon = '✈️'
+            elif 'google' in service_lower:
+                icon = '🔍'
+            elif 'facebook' in service_lower:
+                icon = '📘'
+            elif 'instagram' in service_lower:
+                icon = '📷'
+            
+            btn_text = f"{icon} {service_name} - {sale_price} " + ('كريديت' if language == 'ar' else 'credits')
+            
+            keyboard.append([InlineKeyboardButton(
+                btn_text,
+                callback_data=f"sp_buy_{country_id}_{service_id}"
+            )])
+        
+        keyboard.append([InlineKeyboardButton(
+            get_smspool_message('back', language),
+            callback_data="sp_buy"
+        )])
+        
+        title = get_smspool_message('select_service', language)
+        text = f"<b>{flag} {country_name}</b>\n\n<b>{title}</b>"
+        
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='HTML'
+        )
     
-    elif data.startswith("sp_service_"):
-        service_id = data.replace("sp_service_", "")
-        country_id = context.user_data.get('sp_country', '1')
-        await confirm_purchase(update, context, country_id, service_id)
+    elif data.startswith("sp_buy_"):
+        # sp_buy_country_service
+        parts = data.replace("sp_buy_", "").split("_")
+        if len(parts) >= 2:
+            country_id = parts[0]
+            service_id = parts[1]
+            await confirm_purchase(update, context, country_id, service_id)
+        else:
+            await query.answer("❌ خطأ في البيانات", show_alert=True)
     
     elif data.startswith("sp_confirm_"):
         parts = data.replace("sp_confirm_", "").split("_")
@@ -902,51 +999,98 @@ async def handle_smspool_callback(update: Update, context: ContextTypes.DEFAULT_
         await show_user_orders(update, context)
 
 
-async def show_countries_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """عرض قائمة الدول"""
+async def handle_buy_sms(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """معالج الشراء الأساسي - يفتح Inline Query للبحث عن الدول والخدمات"""
     query = update.callback_query
+    if query:
+        await query.answer()
+    
     user_id = update.effective_user.id
     language = get_user_language(user_id)
     
+    # التحقق من تفعيل الخدمة
+    if not smspool_db.is_enabled():
+        text = get_smspool_message('service_disabled', language)
+        if query:
+            await query.edit_message_text(text)
+        else:
+            await update.message.reply_text(text)
+        return
+    
+    # التحقق من مفتاح API
     api_key = smspool_db.get_api_key()
     if not api_key:
-        await query.edit_message_text(get_smspool_message('service_disabled', language))
+        text = get_smspool_message('service_disabled', language)
+        if query:
+            await query.edit_message_text(text)
+        else:
+            await update.message.reply_text(text)
         return
     
-    api = SMSPoolAPI(api_key)
-    countries = api.get_countries()
+    # فتح Inline Query للبحث
+    if language == 'ar':
+        message_text = (
+            "🔍 *ابحث عن دولة أو خدمة*\n\n"
+            "اضغط على زر \"🔍 ابحث\" أدناه، ثم اكتب:\n\n"
+            "📱 *للبحث عن خدمة:*\n"
+            "• WhatsApp\n"
+            "• Google\n"
+            "• Telegram\n"
+            "• Facebook\n\n"
+            "🌍 *للبحث عن دولة:*\n"
+            "• United States\n"
+            "• United Kingdom\n"
+            "• Canada\n\n"
+            "💡 ابدأ الكتابة وستظهر النتائج تلقائياً!"
+        )
+        search_button = "🔍 ابحث عن خدمة أو دولة"
+    else:
+        message_text = (
+            "🔍 *Search for country or service*\n\n"
+            "Click \"🔍 Search\" button below, then type:\n\n"
+            "📱 *To search for service:*\n"
+            "• WhatsApp\n"
+            "• Google\n"
+            "• Telegram\n"
+            "• Facebook\n\n"
+            "🌍 *To search for country:*\n"
+            "• United States\n"
+            "• United Kingdom\n"
+            "• Canada\n\n"
+            "💡 Start typing and results will appear automatically!"
+        )
+        search_button = "🔍 Search for service or country"
     
-    if not countries:
-        await query.edit_message_text(get_smspool_message('error', language).format(message="No countries available"))
-        return
+    keyboard = [
+        [InlineKeyboardButton(
+            search_button,
+            switch_inline_query_current_chat=""
+        )],
+        [InlineKeyboardButton(
+            get_smspool_message('back', language),
+            callback_data="sp_main"
+        )]
+    ]
     
-    popular_countries = ['US', 'GB', 'CA', 'DE', 'FR', 'NL', 'RU', 'IN', 'PH', 'ID']
+    reply_markup = InlineKeyboardMarkup(keyboard)
     
-    keyboard = []
-    for country in countries[:20]:
-        country_id = country.get('ID', country.get('id', ''))
-        country_name = country.get('name', '')
-        short_name = country.get('short_name', '')
-        
-        flag = get_country_flag(short_name)
-        btn_text = f"{flag} {country_name}"
-        
-        keyboard.append([InlineKeyboardButton(
-            btn_text,
-            callback_data=f"sp_country_{country_id}"
-        )])
-    
-    keyboard.append([InlineKeyboardButton(
-        get_smspool_message('back', language),
-        callback_data="sp_main"
-    )])
-    
-    title = get_smspool_message('select_country', language)
-    await query.edit_message_text(
-        f"<b>{title}</b>",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='HTML'
-    )
+    if query:
+        await query.edit_message_text(
+            message_text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    else:
+        await update.message.reply_text(
+            message_text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+
+
+async def show_countries_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """عرض قائمة الدول - تم استبدالها بـ Inline Query"""
+    await handle_buy_sms(update, context)
 
 
 async def show_services_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
@@ -1002,30 +1146,71 @@ async def confirm_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE,
     api_key = smspool_db.get_api_key()
     api = SMSPoolAPI(api_key)
     
+    # الحصول على معلومات السعر
     price_info = api.get_service_price(service_id, country_id)
     cost_price = float(price_info.get('price', 0.5)) if price_info else 0.5
     
     margin = smspool_db.get_margin_percent()
     sale_price = round(cost_price * (1 + margin/100), 2)
     
+    # الحصول على معلومات الخدمة والدولة
+    services = api.get_services()
+    service_name = 'Unknown'
+    for s in services:
+        if str(s.get('ID', s.get('id', ''))) == service_id:
+            service_name = s.get('name', 'Unknown')
+            break
+    
+    countries = api.get_countries()
+    country_name = 'Unknown'
+    country_code = ''
+    for c in countries:
+        if str(c.get('ID', c.get('id', ''))) == country_id:
+            country_name = c.get('name', 'Unknown')
+            country_code = c.get('short_name', '')
+            break
+    
+    flag = get_country_flag(country_code)
+    
+    # أيقونة الخدمة
+    icon = '📱'
+    service_lower = service_name.lower()
+    if 'whatsapp' in service_lower:
+        icon = '💚'
+    elif 'telegram' in service_lower:
+        icon = '✈️'
+    elif 'google' in service_lower:
+        icon = '🔍'
+    elif 'facebook' in service_lower:
+        icon = '📘'
+    elif 'instagram' in service_lower:
+        icon = '📷'
+    
     if balance < sale_price:
         await query.edit_message_text(
             get_smspool_message('insufficient_balance', language).format(
                 balance=balance,
                 required=sale_price
-            )
+            ),
+            parse_mode='HTML'
         )
         return
     
     context.user_data['sp_cost_price'] = cost_price
     context.user_data['sp_sale_price'] = sale_price
+    context.user_data['sp_service_name'] = service_name
+    context.user_data['sp_country_name'] = country_name
     
     if language == 'ar':
         text = f"""
 💰 <b>تأكيد الشراء</b>
 
-💵 السعر: <code>{sale_price}</code> كريديت
-💳 رصيدك: <code>{balance}</code> كريديت
+{icon} <b>الخدمة:</b> {service_name}
+{flag} <b>الدولة:</b> {country_name}
+
+💵 <b>السعر:</b> <code>{sale_price}</code> كريديت
+💳 <b>رصيدك:</b> <code>{balance}</code> كريديت
+💵 <b>الرصيد بعد الشراء:</b> <code>{balance - sale_price}</code> كريديت
 
 هل تريد المتابعة؟
 """
@@ -1033,8 +1218,12 @@ async def confirm_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE,
         text = f"""
 💰 <b>Confirm Purchase</b>
 
-💵 Price: <code>{sale_price}</code> credits
-💳 Your balance: <code>{balance}</code> credits
+{icon} <b>Service:</b> {service_name}
+{flag} <b>Country:</b> {country_name}
+
+💵 <b>Price:</b> <code>{sale_price}</code> credits
+💳 <b>Your balance:</b> <code>{balance}</code> credits
+💵 <b>Balance after:</b> <code>{balance - sale_price}</code> credits
 
 Do you want to proceed?
 """
@@ -1066,6 +1255,8 @@ async def process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE,
     
     cost_price = context.user_data.get('sp_cost_price', 0.5)
     sale_price = context.user_data.get('sp_sale_price', 0.5)
+    service_name = context.user_data.get('sp_service_name', 'Unknown')
+    country_name = context.user_data.get('sp_country_name', 'Unknown')
     
     balance = get_user_balance(user_id)
     if balance < sale_price:
@@ -1073,85 +1264,126 @@ async def process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE,
             get_smspool_message('insufficient_balance', language).format(
                 balance=balance,
                 required=sale_price
-            )
+            ),
+            parse_mode='HTML'
         )
         return
+    
+    # عرض رسالة معالجة
+    processing_msg = "⏳ " + ("جاري معالجة الطلب..." if language == 'ar' else "Processing order...")
+    await query.edit_message_text(processing_msg)
     
     api_key = smspool_db.get_api_key()
     api = SMSPoolAPI(api_key)
     
-    result = api.purchase_sms(country_id, service_id)
+    try:
+        result = api.purchase_sms(country_id, service_id)
+        
+        if result.get('status') == 'success':
+            # خصم الرصيد
+            update_user_balance(user_id, sale_price, 'subtract')
+            
+            order_id = result.get('order_id')
+            number = result.get('number')
+            country = result.get('country', country_name)
+            service = result.get('service', service_name)
+            pool = result.get('pool', '')
+            expires_in = result.get('expires_in', 600)
+            
+            # حفظ الطلب في قاعدة البيانات
+            smspool_db.create_order(
+                user_id=user_id,
+                order_id=order_id,
+                number=number,
+                country=country,
+                country_id=country_id,
+                service=service,
+                service_id=service_id,
+                pool=str(pool),
+                cost_price=cost_price,
+                sale_price=sale_price,
+                expires_in=expires_in
+            )
+            
+            expires_min = expires_in // 60
+            
+            # أيقونة الخدمة
+            icon = '📱'
+            service_lower = service.lower()
+            if 'whatsapp' in service_lower:
+                icon = '💚'
+            elif 'telegram' in service_lower:
+                icon = '✈️'
+            elif 'google' in service_lower:
+                icon = '🔍'
+            elif 'facebook' in service_lower:
+                icon = '📘'
+            elif 'instagram' in service_lower:
+                icon = '📷'
+            
+            text = get_smspool_message('purchase_success', language).format(
+                number=number,
+                country=country,
+                service=service,
+                expires=expires_min
+            )
+            
+            keyboard = [
+                [InlineKeyboardButton(
+                    "🔄 " + ("فحص الرسالة" if language == 'ar' else "Check SMS"),
+                    callback_data=f"sp_check_{order_id}"
+                )],
+                [InlineKeyboardButton(
+                    "📤 " + ("إعادة إرسال" if language == 'ar' else "Resend"),
+                    callback_data=f"sp_resend_{order_id}"
+                )],
+                [InlineKeyboardButton(
+                    "❌ " + ("إلغاء واسترداد" if language == 'ar' else "Cancel & Refund"),
+                    callback_data=f"sp_cancel_{order_id}"
+                )],
+                [InlineKeyboardButton(
+                    get_smspool_message('back', language),
+                    callback_data="sp_main"
+                )]
+            ]
+            
+            await query.edit_message_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='HTML'
+            )
+            
+            # بدء المراقبة التلقائية للرسائل
+            if hasattr(context, 'job_queue') and context.job_queue:
+                context.job_queue.run_repeating(
+                    check_sms_job,
+                    interval=10,
+                    first=5,
+                    data={'order_id': order_id, 'user_id': user_id, 'chat_id': query.message.chat_id},
+                    name=f"sms_check_{order_id}"
+                )
+                logger.info(f"🔄 بدء المراقبة التلقائية للطلب {order_id}")
+            else:
+                logger.warning("⚠️ job_queue غير متاح - المراقبة التلقائية معطلة")
+        else:
+            error_msg = result.get('message', 'Purchase failed')
+            error_code = get_error_code_from_message(error_msg)
+            
+            await query.edit_message_text(
+                get_smspool_message('error', language).format(message=ERROR_CODES.get(error_code, error_msg)),
+                parse_mode='HTML'
+            )
+            
+            logger.error(f"فشل شراء SMSPool للمستخدم {user_id}: {error_msg}")
     
-    if result.get('status') == 'success':
-        update_user_balance(user_id, sale_price, 'subtract')
+    except Exception as e:
+        logger.error(f"خطأ في معالجة شراء SMSPool: {e}")
         
-        order_id = result.get('order_id')
-        number = result.get('number')
-        country = result.get('country', '')
-        service = result.get('service', '')
-        pool = result.get('pool', '')
-        expires_in = result.get('expires_in', 600)
+        error_text = "❌ " + ("حدث خطأ غير متوقع" if language == 'ar' else "An unexpected error occurred")
+        error_text += "\n\n"
+        error_text += ("يرجى المحاولة لاحقاً أو التواصل مع الآدمن" if language == 'ar' else "Please try again later or contact admin")
         
-        smspool_db.create_order(
-            user_id=user_id,
-            order_id=order_id,
-            number=number,
-            country=country,
-            country_id=country_id,
-            service=service,
-            service_id=service_id,
-            pool=str(pool),
-            cost_price=cost_price,
-            sale_price=sale_price,
-            expires_in=expires_in
-        )
-        
-        expires_min = expires_in // 60
-        
-        text = get_smspool_message('purchase_success', language).format(
-            number=number,
-            country=country,
-            service=service,
-            expires=expires_min
-        )
-        
-        keyboard = [
-            [InlineKeyboardButton(
-                "🔄 " + ("فحص الرسالة" if language == 'ar' else "Check SMS"),
-                callback_data=f"sp_check_{order_id}"
-            )],
-            [InlineKeyboardButton(
-                "📤 " + ("إعادة إرسال" if language == 'ar' else "Resend"),
-                callback_data=f"sp_resend_{order_id}"
-            )],
-            [InlineKeyboardButton(
-                "❌ " + ("إلغاء واسترداد" if language == 'ar' else "Cancel & Refund"),
-                callback_data=f"sp_cancel_{order_id}"
-            )],
-            [InlineKeyboardButton(
-                get_smspool_message('back', language),
-                callback_data="sp_main"
-            )]
-        ]
-        
-        await query.edit_message_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='HTML'
-        )
-        
-        context.job_queue.run_repeating(
-            check_sms_job,
-            interval=10,
-            first=5,
-            data={'order_id': order_id, 'user_id': user_id, 'chat_id': query.message.chat_id},
-            name=f"sms_check_{order_id}"
-        )
-    else:
-        error_msg = result.get('message', 'Purchase failed')
-        await query.edit_message_text(
-            get_smspool_message('error', language).format(message=error_msg)
-        )
+        await query.edit_message_text(error_text)
 
 
 async def check_sms_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1511,3 +1743,243 @@ async def handle_admin_margin_input(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text("❌ أدخل رقماً صحيحاً!")
     
     return ConversationHandler.END
+
+
+async def handle_smspool_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    معالج Inline Query للبحث عن خدمات ودول SMSPool
+    يعمل بنفس طريقة NonVoip الناجح
+    """
+    query_text = update.inline_query.query.strip().lower()
+    user_id = update.effective_user.id
+    
+    # تجاهل إذا كان البحث خاصاً بخدمات أخرى
+    if query_text.startswith("socks:") or query_text.startswith("type:"):
+        return
+    
+    language = get_user_language(user_id)
+    
+    logger.info(f"🔍 SMSPool Inline query من المستخدم {user_id}: '{query_text}'")
+    
+    try:
+        api_key = smspool_db.get_api_key()
+        if not api_key:
+            error_result = [
+                InlineQueryResultArticle(
+                    id='no_api_key',
+                    title='❌ ' + ('الخدمة غير متاحة' if language == 'ar' else 'Service unavailable'),
+                    description='يرجى التواصل مع الآدمن' if language == 'ar' else 'Please contact admin',
+                    input_message_content=InputTextMessageContent(
+                        get_smspool_message('service_disabled', language)
+                    )
+                )
+            ]
+            await update.inline_query.answer(error_result, cache_time=10)
+            return
+        
+        api = SMSPoolAPI(api_key)
+        
+        # إذا كان البحث فارغاً، عرض الدول الشائعة
+        if not query_text:
+            countries = api.get_countries()
+            if not countries:
+                return
+            
+            # ترتيب الدول الشائعة أولاً
+            popular_codes = ['US', 'GB', 'CA', 'DE', 'FR', 'NL', 'RU', 'IN', 'PH', 'ID']
+            popular_countries = []
+            other_countries = []
+            
+            for country in countries[:50]:
+                short_name = country.get('short_name', country.get('code', ''))
+                if short_name in popular_codes:
+                    popular_countries.append(country)
+                else:
+                    other_countries.append(country)
+            
+            # دمج القوائم: الشائعة أولاً
+            sorted_countries = popular_countries + other_countries[:10]
+            
+            results = []
+            for country in sorted_countries[:20]:
+                country_id = str(country.get('ID', country.get('id', '')))
+                country_name = country.get('name', 'Unknown')
+                short_name = country.get('short_name', country.get('code', ''))
+                
+                flag = get_country_flag(short_name)
+                
+                title = f"{flag} {country_name}"
+                description = 'انقر لعرض الخدمات المتاحة' if language == 'ar' else 'Click to view available services'
+                
+                results.append(
+                    InlineQueryResultArticle(
+                        id=f'country_{country_id}',
+                        title=title,
+                        description=description,
+                        input_message_content=InputTextMessageContent(
+                            f"{flag} **{country_name}**\n\n"
+                            + ('جاري تحميل الخدمات المتاحة...' if language == 'ar' else 'Loading available services...'),
+                            parse_mode='Markdown'
+                        ),
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton(
+                                '📱 ' + ('عرض الخدمات' if language == 'ar' else 'View Services'),
+                                callback_data=f'sp_country_{country_id}'
+                            )
+                        ]]),
+                        thumbnail_url='https://upload.wikimedia.org/wikipedia/commons/thumb/1/1b/Mobile_phone_icon.svg/120px-Mobile_phone_icon.svg.png'
+                    )
+                )
+            
+            await update.inline_query.answer(
+                results,
+                cache_time=300,
+                is_personal=True,
+                button=InlineQueryResultsButton(
+                    text='💡 ' + ('اختر دولة' if language == 'ar' else 'Select a country'),
+                    start_parameter='inline_help'
+                )
+            )
+            return
+        
+        # البحث عن دول أو خدمات
+        results = []
+        
+        # البحث في الدول
+        countries = api.get_countries()
+        matching_countries = []
+        
+        for country in countries:
+            country_name = country.get('name', '').lower()
+            short_name = country.get('short_name', '').lower()
+            
+            if query_text in country_name or query_text in short_name:
+                matching_countries.append(country)
+        
+        # إضافة نتائج الدول
+        for country in matching_countries[:10]:
+            country_id = str(country.get('ID', country.get('id', '')))
+            country_name = country.get('name', 'Unknown')
+            short_name = country.get('short_name', country.get('code', ''))
+            
+            flag = get_country_flag(short_name)
+            
+            title = f"{flag} {country_name}"
+            description = 'انقر لعرض الخدمات المتاحة' if language == 'ar' else 'Click to view available services'
+            
+            results.append(
+                InlineQueryResultArticle(
+                    id=f'country_{country_id}',
+                    title=title,
+                    description=description,
+                    input_message_content=InputTextMessageContent(
+                        f"{flag} **{country_name}**\n\n"
+                        + ('جاري تحميل الخدمات المتاحة...' if language == 'ar' else 'Loading available services...'),
+                        parse_mode='Markdown'
+                    ),
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton(
+                            '📱 ' + ('عرض الخدمات' if language == 'ar' else 'View Services'),
+                            callback_data=f'sp_country_{country_id}'
+                        )
+                    ]]),
+                    thumbnail_url='https://upload.wikimedia.org/wikipedia/commons/thumb/1/1b/Mobile_phone_icon.svg/120px-Mobile_phone_icon.svg.png'
+                )
+            )
+        
+        # البحث في الخدمات
+        services = api.get_services()
+        matching_services = []
+        
+        for service in services:
+            service_name = service.get('name', '').lower()
+            service_id = service.get('ID', service.get('id', ''))
+            
+            if query_text in service_name:
+                matching_services.append(service)
+        
+        # إضافة نتائج الخدمات (مع دولة افتراضية US)
+        margin = smspool_db.get_margin_percent()
+        
+        for service in matching_services[:10]:
+            service_id = str(service.get('ID', service.get('id', '')))
+            service_name = service.get('name', 'Unknown')
+            
+            # الحصول على السعر (سنستخدم سعراً افتراضياً)
+            estimated_price = 0.5
+            sale_price = round(estimated_price * (1 + margin/100), 2)
+            
+            icon = '📱'
+            if 'whatsapp' in service_name.lower():
+                icon = '💚'
+            elif 'telegram' in service_name.lower():
+                icon = '✈️'
+            elif 'google' in service_name.lower():
+                icon = '🔍'
+            elif 'facebook' in service_name.lower():
+                icon = '📘'
+            
+            title = f"{icon} {service_name}"
+            description = f"~{sale_price} " + ('كريديت (تقريبي)' if language == 'ar' else 'credits (estimated)')
+            
+            results.append(
+                InlineQueryResultArticle(
+                    id=f'service_{service_id}',
+                    title=title,
+                    description=description,
+                    input_message_content=InputTextMessageContent(
+                        f"{icon} **{service_name}**\n\n"
+                        + ('💰 السعر: ~' if language == 'ar' else '💰 Price: ~') + f"{sale_price} "
+                        + ('كريديت (تقريبي)' if language == 'ar' else 'credits (estimated)') + "\n\n"
+                        + ('اختر دولة لمتابعة الشراء' if language == 'ar' else 'Select a country to continue'),
+                        parse_mode='Markdown'
+                    ),
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton(
+                            '🌍 ' + ('اختيار الدولة' if language == 'ar' else 'Select Country'),
+                            callback_data=f'sp_service_select_{service_id}'
+                        )
+                    ]]),
+                    thumbnail_url='https://upload.wikimedia.org/wikipedia/commons/thumb/1/1b/Mobile_phone_icon.svg/120px-Mobile_phone_icon.svg.png'
+                )
+            )
+        
+        if not results:
+            # لا توجد نتائج
+            no_results_title = '❌ ' + ('لا توجد نتائج' if language == 'ar' else 'No results')
+            no_results_desc = ('لم يتم العثور على تطابق' if language == 'ar' else 'No matches found')
+            
+            results = [
+                InlineQueryResultArticle(
+                    id='no_results',
+                    title=no_results_title,
+                    description=no_results_desc,
+                    input_message_content=InputTextMessageContent(
+                        f'❌ ' + ('لا توجد نتائج لـ' if language == 'ar' else 'No results for') + f' "{query_text}"\n\n'
+                        + ('💡 جرب البحث عن: WhatsApp, Google, Telegram' if language == 'ar' else '💡 Try: WhatsApp, Google, Telegram')
+                    )
+                )
+            ]
+        
+        await update.inline_query.answer(
+            results,
+            cache_time=60,
+            is_personal=True
+        )
+        
+        logger.info(f"تم إرسال {len(results)} نتيجة للمستخدم {user_id}")
+    
+    except Exception as e:
+        logger.error(f"خطأ في معالجة SMSPool inline query: {e}")
+        
+        error_result = [
+            InlineQueryResultArticle(
+                id='error',
+                title='❌ ' + ('حدث خطأ' if language == 'ar' else 'Error occurred'),
+                description='يرجى المحاولة مرة أخرى' if language == 'ar' else 'Please try again',
+                input_message_content=InputTextMessageContent(
+                    f'❌ ' + ('حدث خطأ:' if language == 'ar' else 'Error:') + f' {str(e)}'
+                )
+            )
+        ]
+        await update.inline_query.answer(error_result, cache_time=10)
