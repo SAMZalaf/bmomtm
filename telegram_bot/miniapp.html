@@ -1,172 +1,0 @@
-<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>إدارة الأزرار الديناميكية</title>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <link rel="stylesheet" href="/static/css/miniapp.css">
-</head>
-<body>
-    <div id="app">
-        <header class="header">
-            <h1>🎛️ إدارة الأزرار</h1>
-            <div class="header-actions">
-                <button class="btn btn-icon" onclick="refreshTree()" title="تحديث">🔄</button>
-                <button class="btn btn-icon" onclick="showExportImport()" title="تصدير/استيراد">📦</button>
-            </div>
-        </header>
-
-        <nav class="breadcrumb" id="breadcrumb">
-            <span class="breadcrumb-item active" onclick="goToRoot()">🏠 الرئيسية</span>
-        </nav>
-
-        <div class="content">
-            <div class="tree-container" id="treeContainer">
-                <div class="loading" id="loading">
-                    <div class="spinner"></div>
-                    <p>جاري التحميل...</p>
-                </div>
-                <div class="button-list" id="buttonList"></div>
-            </div>
-        </div>
-
-        <button class="fab" onclick="showAddButtonModal()" title="إضافة زر جديد">➕</button>
-    </div>
-
-    <!-- Modal: إضافة/تعديل زر -->
-    <div class="modal" id="buttonModal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2 id="modalTitle">إضافة زر جديد</h2>
-                <button class="btn-close" onclick="closeModal('buttonModal')">&times;</button>
-            </div>
-            <form id="buttonForm" onsubmit="saveButton(event)">
-                <input type="hidden" id="buttonId">
-                <input type="hidden" id="parentId">
-                
-                <div class="form-group">
-                    <label for="buttonKey">المفتاح (بالإنجليزية)</label>
-                    <input type="text" id="buttonKey" required pattern="[a-z0-9_]+" 
-                           placeholder="مثال: static_monthly" title="أحرف صغيرة وأرقام و _ فقط">
-                </div>
-
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="textAr">النص بالعربية</label>
-                        <input type="text" id="textAr" required placeholder="🌐 ستاتيك شهري">
-                    </div>
-                    <div class="form-group">
-                        <label for="textEn">النص بالإنجليزية</label>
-                        <input type="text" id="textEn" required placeholder="🌐 Static Monthly">
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label for="icon">الأيقونة (اختياري)</label>
-                    <input type="text" id="icon" placeholder="🌐">
-                </div>
-
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="buttonType">نوع الزر</label>
-                        <select id="buttonType" onchange="toggleServiceFields()">
-                            <option value="menu">قائمة (له أزرار فرعية)</option>
-                            <option value="service">خدمة نهائية</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="isEnabled">الحالة</label>
-                        <select id="isEnabled">
-                            <option value="1">مفعّل ✅</option>
-                            <option value="0">معطّل ❌</option>
-                        </select>
-                    </div>
-                </div>
-
-                <div id="serviceFields" class="service-fields hidden">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="price">السعر ($)</label>
-                            <input type="number" id="price" step="0.01" min="0" value="0" placeholder="4.00">
-                        </div>
-                        <div class="form-group">
-                            <label for="defaultQuantity">الكمية الافتراضية</label>
-                            <input type="number" id="defaultQuantity" min="1" value="1">
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label class="checkbox-label">
-                            <input type="checkbox" id="askQuantity">
-                            <span>سؤال العميل عن الكمية</span>
-                        </label>
-                    </div>
-                </div>
-
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="messageAr">رسالة بالعربية</label>
-                        <textarea id="messageAr" rows="2" placeholder="اختر الخدمة المطلوبة"></textarea>
-                    </div>
-                    <div class="form-group">
-                        <label for="messageEn">رسالة بالإنجليزية</label>
-                        <textarea id="messageEn" rows="2" placeholder="Choose your service"></textarea>
-                    </div>
-                </div>
-
-                <div class="form-actions">
-                    <button type="button" class="btn btn-secondary" onclick="closeModal('buttonModal')">إلغاء</button>
-                    <button type="submit" class="btn btn-primary">💾 حفظ</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <!-- Modal: تصدير/استيراد -->
-    <div class="modal" id="exportImportModal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>📦 تصدير / استيراد</h2>
-                <button class="btn-close" onclick="closeModal('exportImportModal')">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div class="export-import-tabs">
-                    <button class="tab-btn active" onclick="switchTab('export')">تصدير</button>
-                    <button class="tab-btn" onclick="switchTab('import')">استيراد</button>
-                </div>
-                <div id="exportTab" class="tab-content active">
-                    <p>قم بتصدير جميع الأزرار كملف JSON للنسخ الاحتياطي</p>
-                    <button class="btn btn-primary" onclick="exportTree()">📥 تصدير الأزرار</button>
-                    <textarea id="exportData" class="export-textarea" readonly placeholder="سيظهر هنا محتوى التصدير..."></textarea>
-                </div>
-                <div id="importTab" class="tab-content">
-                    <p>⚠️ تحذير: الاستيراد سيحذف جميع الأزرار الحالية!</p>
-                    <textarea id="importData" class="export-textarea" placeholder="الصق هنا محتوى JSON للاستيراد..."></textarea>
-                    <button class="btn btn-danger" onclick="importTree()">📤 استيراد الأزرار</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Modal: تأكيد الحذف -->
-    <div class="modal" id="deleteModal">
-        <div class="modal-content modal-small">
-            <div class="modal-header">
-                <h2>⚠️ تأكيد الحذف</h2>
-            </div>
-            <div class="modal-body">
-                <p id="deleteMessage">هل أنت متأكد من حذف هذا الزر وجميع أبنائه؟</p>
-            </div>
-            <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeModal('deleteModal')">إلغاء</button>
-                <button class="btn btn-danger" onclick="confirmDelete()">🗑️ حذف</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Toast notifications -->
-    <div class="toast-container" id="toastContainer"></div>
-
-    <script src="/static/js/miniapp.js"></script>
-</body>
-</html>
