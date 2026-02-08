@@ -1,0 +1,152 @@
+‎import requests
+‎from typing import Optional, List, Dict
+‎import json
+‎
+‎class ProxyClient:
+‎    def __init__(self, base_url: str = "http://165.22.199.159:3536"):
+‎        self.base_url = base_url
+‎        self.session = requests.Session()
+‎    
+‎    def search_proxies(self, 
+‎                      country: Optional[str] = None,
+‎                      state: Optional[str] = None, 
+‎                      city: Optional[str] = None,
+‎                      isp: Optional[str] = None,
+‎                      zip_code: Optional[str] = None) -> List[Dict]:
+‎        """
+‎        البحث عن البروكسيات المتاحة مع الأسعار
+‎        """
+‎        endpoint = f"{self.base_url}/api/v1/socks/v3/search"
+‎        
+‎        params = {}
+‎        if country:
+‎            params['country'] = country
+‎        if state:
+‎            params['state'] = state
+‎        if city:
+‎            params['city'] = city
+‎        if isp:
+‎            params['isp'] = isp
+‎        if zip_code:
+‎            params['zip'] = zip_code
+‎        
+‎        try:
+‎            response = self.session.get(endpoint, params=params)
+‎            response.raise_for_status()
+‎            return response.json()
+‎        except requests.exceptions.RequestException as e:
+‎            print(f"خطأ في البحث: {e}")
+‎            return []
+‎    
+‎    def display_proxies_with_prices(self, proxies: List[Dict]) -> None:
+‎        """
+‎        عرض البروكسيات مع الأسعار بشكل منسق
+‎        """
+‎        if not proxies:
+‎            print("لا توجد بروكسيات متاحة")
+‎            return
+‎        
+‎        print("\n" + "="*80)
+‎        print("البروكسيات المتاحة:")
+‎        print("="*80)
+‎        
+‎        for idx, proxy in enumerate(proxies, 1):
+‎            print(f"\n[{idx}] معلومات البروكسي:")
+‎            print(f"    - IP: {proxy.get('ip', 'غير متوفر')}")
+‎            print(f"    - المنفذ: {proxy.get('port', 'غير متوفر')}")
+‎            print(f"    - الدولة: {proxy.get('country', 'غير متوفر')}")
+‎            print(f"    - الولاية: {proxy.get('state', 'غير متوفر')}")
+‎            print(f"    - المدينة: {proxy.get('city', 'غير متوفر')}")
+‎            print(f"    - ISP: {proxy.get('isp', 'غير متوفر')}")
+‎            print(f"    - السعر: ${proxy.get('price', 'غير متوفر')}")
+‎            print(f"    - ID: {proxy.get('id', 'غير متوفر')}")
+‎        
+‎        print("\n" + "="*80)
+‎    
+‎    def buy_proxy(self, proxy_id: str) -> Dict:
+‎        """
+‎        شراء بروكسي محدد
+‎        """
+‎        endpoint = f"{self.base_url}/api/v1/socks/buy"
+‎        
+‎        payload = {
+‎            "proxy_id": proxy_id
+‎        }
+‎        
+‎        try:
+‎            response = self.session.post(
+‎                endpoint, 
+‎                json=payload,
+‎                headers={'Content-Type': 'application/json'}
+‎            )
+‎            response.raise_for_status()
+‎            return response.json()
+‎        except requests.exceptions.RequestException as e:
+‎            print(f"خطأ في عملية الشراء: {e}")
+‎            return {"error": str(e)}
+‎    
+‎    def get_balance(self) -> Dict:
+‎        """
+‎        الحصول على الرصيد الحالي
+‎        """
+‎        endpoint = f"{self.base_url}/api/v1/socks/balance"
+‎        
+‎        try:
+‎            response = self.session.get(endpoint)
+‎            response.raise_for_status()
+‎            return response.json()
+‎        except requests.exceptions.RequestException as e:
+‎            print(f"خطأ في جلب الرصيد: {e}")
+‎            return {"error": str(e)}
+‎    
+‎    def get_available_countries(self) -> List[str]:
+‎        """
+‎        الحصول على قائمة الدول المتاحة
+‎        """
+‎        endpoint = f"{self.base_url}/api/v1/socks/list_country"
+‎        
+‎        try:
+‎            response = self.session.get(endpoint)
+‎            response.raise_for_status()
+‎            return response.json()
+‎        except requests.exceptions.RequestException as e:
+‎            print(f"خطأ في جلب الدول: {e}")
+‎            return []
+‎
+‎
+‎def main():
+‎    """
+‎    مثال على الاستخدام
+‎    """
+‎    # إنشاء عميل API
+‎    client = ProxyClient()
+‎    
+‎    # 1. عرض الرصيد الحالي
+‎    print("جاري جلب الرصيد...")
+‎    balance = client.get_balance()
+‎    print(f"الرصيد الحالي: {balance}")
+‎    
+‎    # 2. البحث عن بروكسيات في الولايات المتحدة
+‎    print("\n جاري البحث عن البروكسيات...")
+‎    proxies = client.search_proxies(
+‎        country="US",
+‎        state="California"  # اختياري
+‎    )
+‎    
+‎    # 3. عرض البروكسيات مع الأسعار
+‎    client.display_proxies_with_prices(proxies)
+‎    
+‎    # 4. السؤال عن موافقة الزبون
+‎    if proxies:
+‎        print("\n هل تريد شراء أحد البروكسيات؟")
+‎        choice = input("أدخل رقم البروكسي (أو 0 للإلغاء): ")
+‎        
+‎        try:
+‎            choice_idx = int(choice)
+‎            if choice_idx > 0 and choice_idx <= len(proxies):
+‎                selected_proxy = proxies[choice_idx - 1]
+‎                
+‎                # تأكيد الشراء
+‎                print(f"\n أنت على وشك شراء البروكسي:")
+‎                print(f"IP: {selected_proxy.get('ip')}")
+‎      

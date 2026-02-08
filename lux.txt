@@ -1,0 +1,5 @@
+Luxury Support:
+🔐 API key for user 8491106530:
+Bearer: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI4NDkxMTA2NTMwIiwiZXhwIjoxODEyNTU3MDA3fQ.j1nNqJinrSqOdQ_DepE8iPH8gdI-iK6HBhaPMvi3owE
+
+http://165.22.199.159:3536/docs#
